@@ -8,10 +8,10 @@ version = "0.1.0"
 description = "Ant Coder: Autonomous Sub-8B Multi-Agent Software Engineering CLI"
 readme = "README.md"
 authors = [{ name = "Deep Das", email = "dasd17933@gmail.com" }]
-license = { text = "Apache-2.0" }
+license = { text = "GPL-3.0-or-later" }
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: POSIX :: Linux",
     "Topic :: Software Development :: Build Tools",
     "Topic :: Scientific/Engineering :: Artificial Intelligence"

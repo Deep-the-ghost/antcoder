@@ -9,7 +9,7 @@
   <a href="https://huggingface.co/Tornado9991/antcoder-builder-7b"><img src="https://img.shields.io/badge/HF_Model-Builder_7B-yellow.svg" alt="Builder Model"></a>
   <a href="https://huggingface.co/Tornado9991/antcoder-fixer-7b"><img src="https://img.shields.io/badge/HF_Model-Fixer_7B-red.svg" alt="Fixer Model"></a>
   <a href="https://huggingface.co/Tornado9991/antcoder-planner-7b"><img src="https://img.shields.io/badge/HF_Model-Planner_7B-blue.svg" alt="Planner Model"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL_v3-blue.svg" alt="License"></a>
 </p>
 
 ---
@@ -112,7 +112,9 @@ antcoder "Implement request timing middleware" --repo ~/my-project --mock
 ---
 
 ## 📜 License
+ 
+Released under the **GNU General Public License v3.0 (GPLv3)**.
 
-Released under the **Apache 2.0 License**.
+See [LICENSE](LICENSE) for details.
 
-**Author**: Deep Das (dasd17933@gmail.com)
+**Author**: Deep Das (<dasd17933@gmail.com>)
