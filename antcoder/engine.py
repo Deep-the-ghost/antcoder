@@ -140,12 +140,13 @@ class ScaffoldingEngine:
             planner_prompt = (
                 f"GOAL SPECIFICATION:\n{goal_description}\n\n"
                 f"{('REPOSITORY CONTEXT:\n' + repo_summary + '\n\n') if repo_summary else ''}"
-                "Decompose this feature into a strict topological JSON DAG. Each node must define 'id', 'file', 'deps', and explicit 'contract' interfaces."
+                "Decompose this feature into a strict topological JSON DAG. Each node must define 'id', 'file', 'deps', and explicit 'contract' interfaces.\n"
+                "IMPORTANT: If building a game or interactive visual application, ALWAYS include an 'index.html' file in the DAG so the user can open and play it directly in their browser."
             )
             planner_messages = [
                 {
                     "role": "system",
-                    "content": "You are an autonomous software architect. When given a codebase context and user feature specification, output ONLY a valid JSON plan containing a Directed Acyclic Graph (DAG) of tasks with strict scalability guardrails, layered architecture, and explicit TypeScript contracts. Output no conversational filler."
+                    "content": "You are an autonomous software architect. When given a codebase context and user feature specification, output ONLY a valid JSON plan containing a Directed Acyclic Graph (DAG) of tasks with strict scalability guardrails, layered architecture, and explicit contracts. For games or web apps, include an index.html file so it is immediately playable in a browser. Output no conversational filler."
                 },
                 {"role": "user", "content": planner_prompt},
             ]
@@ -352,8 +353,16 @@ class ScaffoldingEngine:
             # 6. Commit full feature to branch
             commit_msg = f"feat(antcoder): {goal_description}\n\nTasks implemented: {', '.join(ordered_task_ids)}\nTask-ID: {task_id}"
             committed, commit_info = self.git.commit(commit_msg)
+
+            # Auto-merge verified feature into working branch so files are immediately accessible
+            try:
+                self.git._run(["git", "checkout", orig_branch])
+                self.git._run(["git", "merge", branch_name, "--no-edit"])
+            except Exception:
+                pass
+
             telemetry["status"] = "SUCCESS"
-            telemetry["branch"] = branch_name
+            telemetry["branch"] = orig_branch
             self._emit("feature_complete", {
                 "branch": branch_name,
                 "commit": commit_info,
