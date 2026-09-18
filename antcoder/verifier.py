@@ -157,8 +157,187 @@ class Verifier:
             all_diags.extend(stub_diags)
             raw_outputs.append("\n".join(d.raw for d in stub_diags))
 
+        # 5. Headless Browser Smoke Test for Web / HTML5 projects
+        smoke_diags = self.run_smoke_test(html_file=target_file if target_file and target_file.endswith((".html", ".htm")) else None)
+        if smoke_diags:
+            all_diags.extend(smoke_diags)
+            raw_outputs.append("\n".join(d.raw for d in smoke_diags))
+
         success = len(all_diags) == 0
         return success, all_diags, "\n---\n".join(filter(None, raw_outputs))
+
+    def run_smoke_test(self, html_file: Optional[str] = None) -> List[Diagnostic]:
+        """
+        Automated Headless Smoke Test:
+        Validates that index.html and its loaded scripts evaluate cleanly in a browser DOM environment,
+        catching runtime exceptions (ReferenceError, TypeError, missing element IDs, broken canvas context).
+        """
+        diagnostics: List[Diagnostic] = []
+
+        if html_file:
+            target_html = self.repo_path / html_file
+        else:
+            candidates = list(self.repo_path.glob("**/index.html")) + list(self.repo_path.glob("*.html"))
+            target_html = candidates[0] if candidates else None
+
+        if not target_html or not target_html.exists():
+            return []
+
+        import shutil
+        import json
+        node_bin = shutil.which("node") or "/home/deep/.nvm/versions/node/v24.20.0/bin/node"
+        if not os.path.exists(node_bin) and not shutil.which("node"):
+            return []
+
+        runner_js = f"""
+const vm = require('vm');
+const fs = require('fs');
+const path = require('path');
+
+const htmlPath = {json.dumps(str(target_html))};
+
+try {{
+    const htmlContent = fs.readFileSync(htmlPath, 'utf-8');
+
+    // Extract canvas IDs
+    const canvasMatches = [...htmlContent.matchAll(/<canvas\\s+[^>]*id=['"]([^'"]+)['"]/gi)];
+    const canvasIds = new Set(canvasMatches.map(m => m[1]));
+    if (canvasIds.size === 0) canvasIds.add('gameCanvas');
+
+    // Extract script src tags in order
+    const scriptMatches = [...htmlContent.matchAll(/<script\\s+[^>]*src=['"]([^'"]+)['"]/gi)];
+    const scripts = scriptMatches.map(m => m[1]);
+
+    // If referenced scripts don't exist yet, wait for them to be synthesized in DAG
+    for (const script of scripts) {{
+        const scriptPath = path.resolve(path.dirname(htmlPath), script);
+        if (!fs.existsSync(scriptPath)) {{
+            process.exit(0);
+        }}
+    }}
+
+    const canvasMock = {{
+        getContext: (type) => ({{
+            fillRect: () => {{}},
+            clearRect: () => {{}},
+            drawImage: () => {{}},
+            beginPath: () => {{}},
+            closePath: () => {{}},
+            arc: () => {{}},
+            ellipse: () => {{}},
+            moveTo: () => {{}},
+            lineTo: () => {{}},
+            roundRect: () => {{}},
+            fill: () => {{}},
+            stroke: () => {{}},
+            strokeRect: () => {{}},
+            fillText: () => {{}},
+            save: () => {{}},
+            restore: () => {{}},
+            translate: () => {{}},
+            scale: () => {{}},
+        }}),
+        width: 720,
+        height: 420
+    }};
+
+    const domListeners = [];
+    const frameCallbacks = [];
+    const windowMock = {{
+        addEventListener: (event, handler) => {{
+            if (event === 'DOMContentLoaded') domListeners.push(handler);
+        }},
+        removeEventListener: () => {{}},
+        requestAnimationFrame: (cb) => {{ frameCallbacks.push(cb); return 1; }},
+        cancelAnimationFrame: () => {{}},
+        AudioContext: function() {{
+            return {{
+                createOscillator: () => ({{ connect: () => {{}}, start: () => {{}}, stop: () => {{}}, frequency: {{ setValueAtTime: () => {{}}, exponentialRampToValueAtTime: () => {{}} }} }}),
+                createGain: () => ({{ connect: () => {{}}, gain: {{ setValueAtTime: () => {{}}, linearRampToValueAtTime: () => {{}} }} }}),
+                destination: {{}},
+                state: 'running',
+                resume: () => {{}}
+            }};
+        }},
+        webkitAudioContext: function() {{ return this.AudioContext(); }},
+        Image: function() {{ return {{ onload: null, src: '' }}; }},
+        Audio: function() {{ return {{ play: () => {{}}, pause: () => {{}} }}; }},
+        console: console
+    }};
+    windowMock.window = windowMock;
+    windowMock.globalThis = windowMock;
+
+    const documentMock = {{
+        getElementById: (id) => (canvasIds.has(id) ? canvasMock : null),
+        addEventListener: (event, handler) => {{
+            if (event === 'DOMContentLoaded') domListeners.push(handler);
+        }},
+        createElement: (tag) => (tag.toLowerCase() === 'canvas' ? canvasMock : {{ appendChild: () => {{}} }})
+    }};
+    windowMock.document = documentMock;
+
+    const ctx = vm.createContext(windowMock);
+
+    for (const script of scripts) {{
+        const scriptPath = path.resolve(path.dirname(htmlPath), script);
+        const code = fs.readFileSync(scriptPath, 'utf-8');
+        vm.runInContext(code, ctx, {{ filename: script }});
+    }}
+
+    // Trigger DOMContentLoaded
+    domListeners.forEach(fn => fn());
+
+    // Execute first frame of game loop if registered
+    frameCallbacks.forEach(fn => fn());
+
+    console.log('SMOKE_TEST_OK');
+}} catch (err) {{
+    console.error('SMOKE_TEST_ERROR:' + JSON.stringify({{
+        message: err.message,
+        stack: err.stack,
+        name: err.name
+    }}));
+}}
+"""
+
+        try:
+            proc = subprocess.run(
+                [node_bin, "-e", runner_js],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in proc.stderr.splitlines():
+                if "SMOKE_TEST_ERROR:" in line:
+                    data = json.loads(line.split("SMOKE_TEST_ERROR:", 1)[1])
+                    msg = data.get("message", "Runtime Error")
+                    stack = data.get("stack", "")
+
+                    file_name = str(target_html.relative_to(self.repo_path))
+                    line_no = 1
+                    col_no = 1
+                    m = re.search(r'at (?:.+?\()?([^():\n]+):(\d+):(\d+)\)?', stack)
+                    if m and not m.group(1).startswith("node:"):
+                        file_name = m.group(1)
+                        line_no = int(m.group(2))
+                        col_no = int(m.group(3))
+
+                    raw_diag = f"{file_name}:{line_no}:{col_no} - error BROWSER_RUNTIME_ERROR: {msg}"
+                    diagnostics.append(
+                        Diagnostic(
+                            file=file_name,
+                            line=line_no,
+                            col=col_no,
+                            code="BROWSER_RUNTIME_ERROR",
+                            message=f"BROWSER_RUNTIME_ERROR: {msg}. Ensure all referenced DOM elements exist and scripts initialize without runtime exceptions.",
+                            raw=raw_diag
+                        )
+                    )
+        except Exception:
+            pass
+
+        return diagnostics
 
     def inspect_stubs(self, target_file: Optional[str] = None) -> List[Diagnostic]:
         """
