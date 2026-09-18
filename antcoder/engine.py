@@ -402,21 +402,38 @@ class ScaffoldingEngine:
                         diag = actionable_diags[0]
                         code_context = self.verifier.extract_context(diag.file, diag.line)
 
-                        fixer_prompt = (
-                            f"FILE: {diag.file}\n\n"
-                            f"DIAGNOSTIC:\n{diag.raw}\n\n"
-                            f"CODE CONTEXT:\n{code_context}"
-                        )
+                        if fix_attempt == self.max_fix_retries:
+                            # Final retry: ask for complete corrected file
+                            fixer_prompt = (
+                                f"FILE: {diag.file}\n\n"
+                                f"DIAGNOSTIC:\n{diag.raw}\n\n"
+                                f"CODE CONTEXT:\n{code_context}\n\n"
+                                f"Prior patch attempts failed. Directly output the 100% complete, corrected file with the error fixed."
+                            )
+                        else:
+                            fixer_prompt = (
+                                f"FILE: {diag.file}\n\n"
+                                f"DIAGNOSTIC:\n{diag.raw}\n\n"
+                                f"CODE CONTEXT:\n{code_context}\n\n"
+                                f"Fix the diagnostic error. You may output a SEARCH/REPLACE block:\n"
+                                f"<<<<<<< SEARCH\n"
+                                f"exact lines from code\n"
+                                f"=======\n"
+                                f"corrected lines\n"
+                                f">>>>>>>\n"
+                                f"OR a unified diff patch. Output ONLY the patch block."
+                            )
+
                         fixer_messages = [
                             {
                                 "role": "system",
-                                "content": "You are an autonomous compiler error repair engine. Output ONLY a unified diff patch that fixes the error."
+                                "content": "You are an autonomous compiler error repair engine. Output a SEARCH/REPLACE block or unified diff patch that fixes the error."
                             },
                             {"role": "user", "content": fixer_prompt},
                         ]
 
                         diff_patch = self.model_client.query(fixer_messages, model_type="fixer")
-                        patch_ok, patch_msg = self.git.apply_patch(diff_patch)
+                        patch_ok, patch_msg = self.git.apply_patch(diff_patch, fallback_file=diag.file or target_file)
                         if not patch_ok:
                             self._emit("fixer_patch_failed", {"task_id": t_id, "error": patch_msg})
                         else:
@@ -430,6 +447,22 @@ class ScaffoldingEngine:
                         if success or len(actionable_diags) == 0:
                             self._emit("fixer_resolved", {"task_id": t_id, "attempt": fix_attempt})
                             break
+
+                    # Strict Verification Gate: Abort if unresolved compiler errors remain
+                    if not success and len(actionable_diags) > 0:
+                        self._emit("task_failed", {
+                            "task_id": t_id,
+                            "file": target_file,
+                            "errors": len(actionable_diags),
+                            "diagnostics": [d.to_dict() for d in actionable_diags]
+                        })
+                        log(f"Verification failed to resolve for task {t_id} ({target_file}). Aborting.")
+                        self.git.rollback()
+                        self.git._run(["git", "checkout", orig_branch], check=False)
+                        telemetry["status"] = "FAILED_VERIFICATION"
+                        telemetry["failed_task"] = t_id
+                        telemetry["unresolved_diagnostics"] = [d.to_dict() for d in actionable_diags]
+                        return telemetry
 
                 telemetry["completed_tasks"].append(t_id)
                 self._emit("task_complete", {"task_id": t_id})
