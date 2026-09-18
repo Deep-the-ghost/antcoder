@@ -5,11 +5,14 @@ Command-line interface to execute autonomous software development loops.
 
 import sys
 import argparse
+import os
+import shutil
 from pathlib import Path
 
 from .ui import TerminalUI
 from .engine import ScaffoldingEngine
 from .model_client import HTTPModelClient, MockModelClient
+from .ollama_manager import OllamaManager
 
 
 def main():
@@ -131,45 +134,75 @@ def main():
                 print(f"Error: '{repo_path}' is not a valid git repository.")
             sys.exit(1)
 
-    # Detect if local LLM endpoint is active or offer mock mode
+    # Autonomous Model Engine Discovery & Provisioning
     if not args.mock:
-        endpoint_online = False
-        import urllib.request
-        for test_url in [f"{args.endpoint}/models", "http://localhost:1234/v1/models", "http://localhost:8000/v1/models"]:
-            try:
-                req = urllib.request.Request(test_url, headers={"User-Agent": "AntCoder"})
-                with urllib.request.urlopen(req, timeout=0.6) as resp:
-                    if resp.status == 200:
-                        endpoint_online = True
-                        if "1234" in test_url:
-                            args.endpoint = "http://localhost:1234/v1"
-                        break
-            except Exception:
-                continue
+        ollama_mgr = OllamaManager()
+        is_ollama_available = (
+            ollama_mgr.is_server_running() 
+            or bool(shutil.which("ollama")) 
+            or os.path.exists("/snap/bin/ollama")
+        )
 
-        if not endpoint_online:
-            if sys.stdin.isatty():
+        ollama_configured = False
+        if is_ollama_available:
+            if ui.rich:
+                ui.console.print("\n[bold cyan]🦙 Ollama detected![/bold cyan] Configuring Ant Coder multi-agent models...")
+            else:
+                print("\n🦙 Ollama detected! Configuring Ant Coder multi-agent models...")
+
+            success, endpoint, models = ollama_mgr.setup_antcoder_suite(ui=ui)
+            if success:
+                args.endpoint = endpoint
+                args.planner_model = models.get("planner", "antcoder-planner")
+                args.builder_model = models.get("builder", "antcoder-builder")
+                args.fixer_model = models.get("fixer", "antcoder-fixer")
+                ollama_configured = True
+                if ui.rich:
+                    ui.console.print(f"[bold green]✅ Ant Coder Tri-Agent models ready on Ollama ({args.planner_model}, {args.builder_model}, {args.fixer_model})[/bold green]")
+                else:
+                    print(f"✅ Ant Coder Tri-Agent models ready on Ollama ({args.planner_model}, {args.builder_model}, {args.fixer_model})")
+
+        if not ollama_configured:
+            # Fallback check for generic OpenAI-compatible servers (vLLM on 8000, LM Studio on 1234)
+            endpoint_online = False
+            import urllib.request
+            for test_url in [f"{args.endpoint}/models", "http://localhost:1234/v1/models", "http://localhost:8000/v1/models"]:
                 try:
-                    from rich.prompt import Confirm
-                    if ui.rich:
-                        ui.console.print("\n[yellow]💡 Local LLM server (vLLM / LM Studio) is not running on port 8000/1234.[/yellow]")
-                        run_mock = Confirm.ask(
-                            "[bold green]🚀 Run in offline Simulation/Demo mode to test the agent workflow?[/bold green]",
-                            default=True
-                        )
-                    else:
-                        run_mock = (input("Run in offline simulation mode? [Y/n]: ").strip().lower() != 'n')
-                    if run_mock:
-                        args.mock = True
-                    else:
+                    req = urllib.request.Request(test_url, headers={"User-Agent": "AntCoder"})
+                    with urllib.request.urlopen(req, timeout=0.6) as resp:
+                        if resp.status == 200:
+                            endpoint_online = True
+                            if "1234" in test_url:
+                                args.endpoint = "http://localhost:1234/v1"
+                            elif "8000" in test_url:
+                                args.endpoint = "http://localhost:8000/v1"
+                            break
+                except Exception:
+                    continue
+
+            if not endpoint_online:
+                if sys.stdin.isatty():
+                    try:
+                        from rich.prompt import Confirm
                         if ui.rich:
-                            ui.console.print("[dim]Please start your local LLM server and try again.[/dim]")
+                            ui.console.print("\n[yellow]💡 Local LLM server (Ollama / vLLM / LM Studio) is not currently running.[/yellow]")
+                            run_mock = Confirm.ask(
+                                "[bold green]🚀 Run in offline Simulation/Demo mode to test the agent workflow?[/bold green]",
+                                default=True
+                            )
                         else:
-                            print("Please start your local LLM server and try again.")
-                        sys.exit(1)
-                except (KeyboardInterrupt, EOFError):
-                    print("\nAborted.")
-                    sys.exit(0)
+                            run_mock = (input("Run in offline simulation mode? [Y/n]: ").strip().lower() != 'n')
+                        if run_mock:
+                            args.mock = True
+                        else:
+                            if ui.rich:
+                                ui.console.print("[dim]Please start your local LLM server and try again.[/dim]")
+                            else:
+                                print("Please start your local LLM server and try again.")
+                            sys.exit(1)
+                    except (KeyboardInterrupt, EOFError):
+                        print("\nAborted.")
+                        sys.exit(0)
 
     ui.print_goal(goal=args.goal, repo=str(repo_path))
 
