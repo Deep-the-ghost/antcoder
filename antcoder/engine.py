@@ -93,6 +93,54 @@ class ScaffoldingEngine:
 
         raise ValueError(f"Could not parse valid JSON DAG from planner output. Snippet: {raw_text[:200]}")
 
+    def scan_repository(self) -> str:
+        """
+        Scans the repository to produce a concise architectural summary of existing files,
+        exported classes/functions, and project structure for incremental planning.
+        """
+        summary_lines = []
+        ignored_dirs = {".git", "node_modules", "dist", "build", ".venv", "venv", "__pycache__"}
+
+        all_files = []
+        for p in self.repo_path.rglob("*"):
+            if not p.is_file():
+                continue
+            if any(part in ignored_dirs for part in p.parts):
+                continue
+            all_files.append(p)
+
+        if not all_files:
+            return ""
+
+        summary_lines.append(f"Found {len(all_files)} existing file(s) in repository:")
+        for f in sorted(all_files, key=lambda x: str(x)):
+            try:
+                rel = str(f.relative_to(self.repo_path))
+            except Exception:
+                rel = f.name
+            size = f.stat().st_size
+
+            # Extract key signatures if code file
+            sigs = []
+            if f.suffix in [".js", ".mjs", ".ts", ".tsx"]:
+                try:
+                    text = f.read_text(encoding="utf-8", errors="ignore")
+                    classes = re.findall(r'class\s+([A-Za-z0-9_$]+)', text)
+                    functions = re.findall(r'(?:function\s+|const\s+|let\s+)([A-Za-z0-9_$]+)\s*=\s*(?:function|\([^)]*\)\s*=>)', text)
+                    if classes:
+                        sigs.append("classes: " + ", ".join(classes[:5]))
+                    if functions:
+                        sigs.append("functions: " + ", ".join(functions[:5]))
+                except Exception:
+                    pass
+            elif f.suffix == ".html":
+                sigs.append("HTML entrypoint")
+
+            sig_str = f" ({'; '.join(sigs)})" if sigs else ""
+            summary_lines.append(f"  - {rel} [{size} bytes]{sig_str}")
+
+        return "\n".join(summary_lines)
+
     def execute_feature_goal(
         self,
         goal_description: str,
@@ -128,6 +176,10 @@ class ScaffoldingEngine:
         def log(msg: str):
             telemetry["logs"].append(f"{time.strftime('%H:%M:%S')} - {msg}")
 
+        # Ingest existing repository context if not explicitly provided
+        if repo_summary is None:
+            repo_summary = self.scan_repository()
+
         # 1. Isolate workspace on a new feature branch
         orig_branch = self.git.get_current_branch()
         self.git.create_feature_branch(branch_name)
@@ -137,20 +189,39 @@ class ScaffoldingEngine:
         try:
             # 2. Query Planner LoRA for Architectural DAG
             self._emit("planner_start", {"goal": goal_description})
-            planner_prompt = (
-                f"GOAL SPECIFICATION:\n{goal_description}\n\n"
-                f"{('REPOSITORY CONTEXT:\n' + repo_summary + '\n\n') if repo_summary else ''}"
-                "Decompose this feature into a strict topological JSON DAG. Each node must define 'id', 'file', 'deps', and explicit 'contract' interfaces.\n"
-                "Declare 'target_runtime' in the JSON root ('browser-vanilla' for web/canvas/games, 'node-esm' for backend/modules).\n"
-                "IMPORTANT: If building a game or interactive visual application, ALWAYS include an 'index.html' file in the DAG so the user can open and play it directly in their browser."
-            )
-            planner_messages = [
-                {
-                    "role": "system",
-                    "content": "You are an autonomous software architect. When given a codebase context and user feature specification, output ONLY a valid JSON plan containing a Directed Acyclic Graph (DAG) of tasks with strict scalability guardrails, layered architecture, explicit contracts, and target_runtime. For games or web apps, set target_runtime to 'browser-vanilla' and include an index.html file so it is immediately playable in a browser. Output no conversational filler."
-                },
-                {"role": "user", "content": planner_prompt},
-            ]
+
+            is_incremental = bool(repo_summary and repo_summary.strip())
+            if is_incremental:
+                planner_prompt = (
+                    f"GOAL SPECIFICATION:\n{goal_description}\n\n"
+                    f"EXISTING REPOSITORY CONTEXT:\n{repo_summary}\n\n"
+                    "INCREMENTAL UPDATE RULES:\n"
+                    "1. You are modifying an EXISTING repository. Only plan DAG tasks for files that need to be MODIFIED or CREATED.\n"
+                    "2. Reuse and build on top of existing components, classes, and canvas elements. Do NOT duplicate or needlessly recreate working files.\n"
+                    "3. Ensure the complete application remains functional after changes.\n"
+                    "4. Output ONLY the JSON DAG with target_runtime."
+                )
+                planner_messages = [
+                    {
+                        "role": "system",
+                        "content": "You are an autonomous software architect performing an incremental update on an existing codebase. Output ONLY a valid JSON plan containing a Directed Acyclic Graph (DAG) for the modified or new files. Preserve existing working modules."
+                    },
+                    {"role": "user", "content": planner_prompt},
+                ]
+            else:
+                planner_prompt = (
+                    f"GOAL SPECIFICATION:\n{goal_description}\n\n"
+                    "Decompose this feature into a strict topological JSON DAG. Each node must define 'id', 'file', 'deps', and explicit 'contract' interfaces.\n"
+                    "Declare 'target_runtime' in the JSON root ('browser-vanilla' for web/canvas/games, 'node-esm' for backend/modules).\n"
+                    "IMPORTANT: If building a game or interactive visual application, ALWAYS include an 'index.html' file in the DAG so the user can open and play it directly in their browser."
+                )
+                planner_messages = [
+                    {
+                        "role": "system",
+                        "content": "You are an autonomous software architect. When given a codebase context and user feature specification, output ONLY a valid JSON plan containing a Directed Acyclic Graph (DAG) of tasks with strict scalability guardrails, layered architecture, explicit contracts, and target_runtime. For games or web apps, set target_runtime to 'browser-vanilla' and include an index.html file so it is immediately playable in a browser. Output no conversational filler."
+                    },
+                    {"role": "user", "content": planner_prompt},
+                ]
 
             planner_raw = self.model_client.query(planner_messages, model_type="planner")
 
@@ -375,10 +446,12 @@ class ScaffoldingEngine:
                 success, diagnostics, raw_out = self.verifier.run_compiler(target_file=target_file)
 
                 # Filter diagnostics to actionable errors for current node
-                # (Ignore TS2307 for files that exist in the DAG but are built later)
+                # Scoped to target_file so errors in yet-unvisited sibling tasks do not block current task
+                target_name = Path(target_file).name
                 actionable_diags = [
                     d for d in diagnostics
-                    if not (d.code == "TS2307" and any(Path(df).stem in d.message for df in dag_files))
+                    if (d.file == target_file or Path(d.file).name == target_name)
+                    and not (d.code == "TS2307" and any(Path(df).stem in d.message for df in dag_files))
                 ]
 
                 if success or len(actionable_diags) == 0:
@@ -442,7 +515,8 @@ class ScaffoldingEngine:
                         success, diagnostics, raw_out = self.verifier.run_compiler(target_file=target_file)
                         actionable_diags = [
                             d for d in diagnostics
-                            if not (d.code == "TS2307" and any(Path(df).stem in d.message for df in dag_files))
+                            if (d.file == target_file or Path(d.file).name == target_name)
+                            and not (d.code == "TS2307" and any(Path(df).stem in d.message for df in dag_files))
                         ]
                         if success or len(actionable_diags) == 0:
                             self._emit("fixer_resolved", {"task_id": t_id, "attempt": fix_attempt})
@@ -467,7 +541,27 @@ class ScaffoldingEngine:
                 telemetry["completed_tasks"].append(t_id)
                 self._emit("task_complete", {"task_id": t_id})
 
-            # 5. Run unit tests if configured
+            # 5. Global Feature Gate: Verify integrated repository across all files
+            self._emit("verifier_start", {"task_id": "global_gate"})
+            global_ok, global_diags, global_raw = self.verifier.run_compiler()
+            global_actionable = [
+                d for d in global_diags
+                if not (d.code == "TS2307" and any(Path(df).stem in d.message for df in dag_files))
+            ]
+            if not global_ok and len(global_actionable) > 0:
+                self._emit("verifier_fail", {
+                    "task_id": "global_gate",
+                    "errors": len(global_actionable),
+                    "diagnostics": [d.to_dict() for d in global_actionable[:3]]
+                })
+                log(f"Global verification gate failed with {len(global_actionable)} error(s). Rolling back.")
+                self.git.rollback()
+                self.git._run(["git", "checkout", orig_branch], check=False)
+                telemetry["status"] = "FAILED_VERIFICATION"
+                telemetry["unresolved_diagnostics"] = [d.to_dict() for d in global_actionable]
+                return telemetry
+
+            # 6. Run unit tests if configured
             test_ok, test_out = self.verifier.run_tests()
             if not test_ok:
                 self._emit("tests_failed", {"output": test_out})
@@ -476,7 +570,7 @@ class ScaffoldingEngine:
                 telemetry["status"] = "FAILED_TESTS"
                 return telemetry
 
-            # 6. Commit full feature to branch
+            # 7. Commit full feature to branch
             commit_msg = f"feat(antcoder): {goal_description}\n\nTasks implemented: {', '.join(ordered_task_ids)}\nTask-ID: {task_id}"
             committed, commit_info = self.git.commit(commit_msg)
 
