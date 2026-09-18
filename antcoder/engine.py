@@ -258,7 +258,19 @@ class ScaffoldingEngine:
             # Robust JSON extraction & normalization
             plan_dict = self._parse_json_safely(planner_raw)
             raw_tasks = plan_dict.get("dag") or plan_dict.get("tasks") or plan_dict.get("steps") or []
-            if isinstance(plan_dict, list):
+            if isinstance(raw_tasks, dict):
+                dict_tasks = []
+                for k, v in raw_tasks.items():
+                    if isinstance(v, dict):
+                        if "file" not in v:
+                            v["file"] = k
+                        if "id" not in v:
+                            v["id"] = k
+                        dict_tasks.append(v)
+                    elif isinstance(v, str):
+                        dict_tasks.append({"id": k, "file": k, "contract": v, "deps": []})
+                raw_tasks = dict_tasks
+            elif isinstance(plan_dict, list):
                 raw_tasks = plan_dict
             elif not raw_tasks and isinstance(plan_dict, dict):
                 # Check if the dictionary itself maps filenames or task IDs to task specifications
@@ -277,7 +289,9 @@ class ScaffoldingEngine:
 
             # Target runtime detection: planner declared or auto-inferred
             target_runtime = plan_dict.get("target_runtime")
-            if not target_runtime:
+            if target_runtime in ["browser", "web", "vanilla", "html5"]:
+                target_runtime = "browser-vanilla"
+            elif not target_runtime:
                 goal_lower = goal_description.lower()
                 if any(k in goal_lower for k in ["game", "canvas", "browser", "html", "mario", "snake", "pong", "play", "flappy"]):
                     target_runtime = "browser-vanilla"
@@ -295,7 +309,19 @@ class ScaffoldingEngine:
                     continue
                 t_id = str(t.get("id") or t.get("name") or t.get("step") or f"node_{idx}")
                 t_file = t.get("file") or t.get("file_path") or t.get("path") or f"src/module_{idx}.ts"
-                t_contract = t.get("contract") or t.get("spec") or t.get("description") or t.get("interface") or "export interface ModuleInterface {}"
+                contract_val = (
+                    t.get("contract")
+                    or t.get("spec")
+                    or t.get("actions")
+                    or t.get("description")
+                    or t.get("interface")
+                    or "export interface ModuleInterface {}"
+                )
+                if isinstance(contract_val, list):
+                    t_contract = "\n".join(str(c) for c in contract_val)
+                else:
+                    t_contract = str(contract_val)
+
                 t_deps = t.get("deps") or t.get("dependencies") or []
                 if isinstance(t_deps, str):
                     t_deps = [d.strip() for d in t_deps.split(",") if d.strip()]
@@ -316,12 +342,13 @@ class ScaffoldingEngine:
             telemetry["dag"] = dag_tasks
 
             # 3. Topological Sort
+            task_by_id = {t["id"]: t for t in dag_tasks}
+            task_ids_set = set(task_by_id.keys())
             graph = {}
-            task_by_id = {}
             for t in dag_tasks:
                 t_id = t["id"]
-                task_by_id[t_id] = t
-                graph[t_id] = set(t.get("deps") or t.get("dependencies") or [])
+                raw_deps = t.get("deps") or t.get("dependencies") or []
+                graph[t_id] = {str(d) for d in raw_deps if str(d) in task_ids_set}
 
             ts = TopologicalSorter(graph)
             ordered_task_ids = tuple(ts.static_order())
