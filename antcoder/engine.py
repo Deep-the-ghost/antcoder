@@ -341,17 +341,43 @@ class ScaffoldingEngine:
             log(f"Planner synthesized {len(dag_tasks)} task node(s) in DAG.")
             telemetry["dag"] = dag_tasks
 
-            # 3. Topological Sort
+            # 3. Topological Sort with Autonomous Cycle Breaking
             task_by_id = {t["id"]: t for t in dag_tasks}
             task_ids_set = set(task_by_id.keys())
             graph = {}
             for t in dag_tasks:
                 t_id = t["id"]
                 raw_deps = t.get("deps") or t.get("dependencies") or []
-                graph[t_id] = {str(d) for d in raw_deps if str(d) in task_ids_set}
+                graph[t_id] = {str(d) for d in raw_deps if str(d) in task_ids_set and str(d) != t_id}
 
-            ts = TopologicalSorter(graph)
-            ordered_task_ids = tuple(ts.static_order())
+            ordered_task_ids = None
+            while ordered_task_ids is None:
+                try:
+                    ts = TopologicalSorter(graph)
+                    ordered_task_ids = tuple(ts.static_order())
+                except Exception as cycle_err:
+                    if len(cycle_err.args) >= 2 and isinstance(cycle_err.args[1], (list, tuple)) and len(cycle_err.args[1]) >= 2:
+                        cycle_nodes = cycle_err.args[1]
+                        u, v = cycle_nodes[-2], cycle_nodes[-1]
+                        if u in graph and v in graph[u]:
+                            graph[u].discard(v)
+                            log(f"Autonomously broke cyclic dependency edge: {u} -> {v}")
+                            continue
+                        broken = False
+                        for c_u in cycle_nodes:
+                            if c_u in graph:
+                                for c_v in cycle_nodes:
+                                    if c_v in graph[c_u]:
+                                        graph[c_u].discard(c_v)
+                                        log(f"Autonomously broke cyclic dependency edge: {c_u} -> {c_v}")
+                                        broken = True
+                                        break
+                            if broken:
+                                break
+                        if broken:
+                            continue
+                    # Fallback if specific cycle could not be isolated
+                    ordered_task_ids = tuple(t["id"] for t in dag_tasks)
             self._emit("planner_complete", {
                 "dag": dag_tasks,
                 "order": ordered_task_ids

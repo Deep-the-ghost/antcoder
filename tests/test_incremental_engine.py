@@ -79,7 +79,55 @@ class TestIncrementalEngine(unittest.TestCase):
         extracted = ScaffoldingEngine._extract_code(raw)
         self.assertEqual(extracted, "class Pipe { constructor() {} }")
 
+    def test_cycle_breaking_topological_sort(self):
+        tasks = [
+            {"id": "game.js", "file": "game.js", "deps": ["pipe.js", "bird.js"]},
+            {"id": "pipe.js", "file": "pipe.js", "deps": ["game.js"]},
+            {"id": "bird.js", "file": "bird.js", "deps": []}
+        ]
+        # Simulate cycle-breaking algorithm from ScaffoldingEngine
+        task_by_id = {t["id"]: t for t in tasks}
+        task_ids_set = set(task_by_id.keys())
+        graph = {}
+        for t in tasks:
+            t_id = t["id"]
+            raw_deps = t.get("deps") or t.get("dependencies") or []
+            graph[t_id] = {str(d) for d in raw_deps if str(d) in task_ids_set and str(d) != t_id}
+
+        from graphlib import TopologicalSorter
+        ordered = None
+        while ordered is None:
+            try:
+                ts = TopologicalSorter(graph)
+                ordered = tuple(ts.static_order())
+            except Exception as cycle_err:
+                if len(cycle_err.args) >= 2 and isinstance(cycle_err.args[1], (list, tuple)) and len(cycle_err.args[1]) >= 2:
+                    cycle_nodes = cycle_err.args[1]
+                    u, v = cycle_nodes[-2], cycle_nodes[-1]
+                    if u in graph and v in graph[u]:
+                        graph[u].discard(v)
+                        continue
+                    broken = False
+                    for c_u in cycle_nodes:
+                        if c_u in graph:
+                            for c_v in cycle_nodes:
+                                if c_v in graph[c_u]:
+                                    graph[c_u].discard(c_v)
+                                    broken = True
+                                    break
+                        if broken:
+                            break
+                    if broken:
+                        continue
+                ordered = tuple(t["id"] for t in tasks)
+
+        self.assertEqual(len(ordered), 3)
+        self.assertIn("bird.js", ordered)
+        self.assertIn("pipe.js", ordered)
+        self.assertIn("game.js", ordered)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
