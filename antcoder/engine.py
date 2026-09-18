@@ -141,12 +141,13 @@ class ScaffoldingEngine:
                 f"GOAL SPECIFICATION:\n{goal_description}\n\n"
                 f"{('REPOSITORY CONTEXT:\n' + repo_summary + '\n\n') if repo_summary else ''}"
                 "Decompose this feature into a strict topological JSON DAG. Each node must define 'id', 'file', 'deps', and explicit 'contract' interfaces.\n"
+                "Declare 'target_runtime' in the JSON root ('browser-vanilla' for web/canvas/games, 'node-esm' for backend/modules).\n"
                 "IMPORTANT: If building a game or interactive visual application, ALWAYS include an 'index.html' file in the DAG so the user can open and play it directly in their browser."
             )
             planner_messages = [
                 {
                     "role": "system",
-                    "content": "You are an autonomous software architect. When given a codebase context and user feature specification, output ONLY a valid JSON plan containing a Directed Acyclic Graph (DAG) of tasks with strict scalability guardrails, layered architecture, and explicit contracts. For games or web apps, include an index.html file so it is immediately playable in a browser. Output no conversational filler."
+                    "content": "You are an autonomous software architect. When given a codebase context and user feature specification, output ONLY a valid JSON plan containing a Directed Acyclic Graph (DAG) of tasks with strict scalability guardrails, layered architecture, explicit contracts, and target_runtime. For games or web apps, set target_runtime to 'browser-vanilla' and include an index.html file so it is immediately playable in a browser. Output no conversational filler."
                 },
                 {"role": "user", "content": planner_prompt},
             ]
@@ -158,6 +159,16 @@ class ScaffoldingEngine:
             raw_tasks = plan_dict.get("dag") or plan_dict.get("tasks") or plan_dict.get("steps") or []
             if isinstance(plan_dict, list):
                 raw_tasks = plan_dict
+
+            # Target runtime detection: planner declared or auto-inferred
+            target_runtime = plan_dict.get("target_runtime")
+            if not target_runtime:
+                goal_lower = goal_description.lower()
+                if any(k in goal_lower for k in ["game", "canvas", "browser", "html", "mario", "snake", "pong", "play"]):
+                    target_runtime = "browser-vanilla"
+                else:
+                    target_runtime = "node-esm"
+            log(f"Target execution runtime determined: {target_runtime}")
 
             if not raw_tasks:
                 raise ValueError(f"Planner failed to generate valid 'dag' task nodes. Output preview: {planner_raw[:200]}")
@@ -204,6 +215,14 @@ class ScaffoldingEngine:
                 "order": ordered_task_ids
             })
 
+            # Extract ordered scripts for index.html injection if applicable
+            ordered_js_files = [
+                task_by_id[tid]["file"]
+                for tid in ordered_task_ids
+                if task_by_id.get(tid) and task_by_id[tid]["file"].endswith((".js", ".mjs", ".ts"))
+            ]
+            script_tags_snippet = "\n".join([f'    <script src="{f}"></script>' for f in ordered_js_files])
+
             # Pre-scaffold minimal skeletons for all planned files in DAG
             # This prevents premature 'TS2307: Cannot find module' errors when
             # an early node imports a sibling module that is scheduled for later implementation.
@@ -239,19 +258,23 @@ class ScaffoldingEngine:
                             context_parts.append(f"// Dependency from {dep_task['file']}:\n{f.read()}")
                 context_str = "\n\n".join(context_parts) if context_parts else None
 
-                # Query Builder with extension-aware instructions
+                # Query Builder with extension-aware and runtime-aware instructions
                 is_html = target_file.endswith((".html", ".htm"))
                 is_js = target_file.endswith((".js", ".mjs"))
 
                 if is_html:
                     builder_prompt = (
                         f"FILE: {target_file}\n\n"
+                        f"TARGET RUNTIME: {target_runtime}\n\n"
+                        f"REQUIRED SCRIPT TAGS (in dependency order):\n"
+                        f"Include these exact script tags in the <body> in this order so dependencies load cleanly:\n"
+                        f"{script_tags_snippet}\n\n"
                         f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
                         f"TASK SPECIFICATION:\n"
                         f"Implement the complete HTML file satisfying this contract:\n"
                         f"{spec}\n\n"
                         f"RULES:\n"
-                        f"1. Include all necessary HTML5 boilerplate, canvas/DOM containers, CSS styling, and standard <script src='...'> tags loading all project scripts in proper order.\n"
+                        f"1. Include all necessary HTML5 boilerplate, canvas/DOM containers, responsive CSS styling, and the required <script src='...'> tags in the specified order.\n"
                         f"2. Zero stubs. Output ONLY valid HTML."
                     )
                     builder_messages = [
@@ -262,17 +285,32 @@ class ScaffoldingEngine:
                         {"role": "user", "content": builder_prompt},
                     ]
                 elif is_js:
-                    builder_prompt = (
-                        f"FILE: {target_file}\n\n"
-                        f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
-                        f"TASK SPECIFICATION:\n"
-                        f"Implement the complete JavaScript file satisfying this contract:\n"
-                        f"```javascript\n{spec}\n```\n\n"
-                        f"RULES:\n"
-                        f"1. Write 100% valid modern JavaScript (ES6+). Do NOT include TypeScript type annotations or TypeScript private/public modifiers.\n"
-                        f"2. Ensure all functions, methods, game mechanics, physics, and rendering are fully implemented with ZERO stubs or empty placeholders.\n"
-                        f"3. Make components browser-accessible (e.g., attach to globalThis / window and/or module.exports)."
-                    )
+                    if target_runtime == "browser-vanilla":
+                        builder_prompt = (
+                            f"FILE: {target_file}\n\n"
+                            f"TARGET RUNTIME: browser-vanilla (Runs directly in browser via file:// or static server)\n\n"
+                            f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
+                            f"TASK SPECIFICATION:\n"
+                            f"Implement the complete JavaScript file satisfying this contract:\n"
+                            f"```javascript\n{spec}\n```\n\n"
+                            f"RULES:\n"
+                            f"1. Write 100% valid modern JavaScript (ES6+). Do NOT include TypeScript type annotations or TypeScript private/public modifiers.\n"
+                            f"2. BROWSER SCRIPT COMPATIBILITY: Do NOT use bare 'import ... from ...' statements that fail over file:// protocol without a bundler. Instead, attach classes and functions to globalThis/window (e.g. `(function(root) {{ class Component {{ ... }} root.Component = Component; }})(typeof window !== 'undefined' ? window : globalThis);`).\n"
+                            f"3. Ensure all functions, methods, game mechanics, physics, and rendering are fully implemented with ZERO stubs or empty placeholders."
+                        )
+                    else:
+                        builder_prompt = (
+                            f"FILE: {target_file}\n\n"
+                            f"TARGET RUNTIME: {target_runtime}\n\n"
+                            f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
+                            f"TASK SPECIFICATION:\n"
+                            f"Implement the complete JavaScript file satisfying this contract:\n"
+                            f"```javascript\n{spec}\n```\n\n"
+                            f"RULES:\n"
+                            f"1. Write 100% valid modern JavaScript (ES6+). Do NOT include TypeScript type annotations or TypeScript private/public modifiers.\n"
+                            f"2. Ensure all functions, methods, mechanics, and logic are fully implemented with ZERO stubs or empty placeholders.\n"
+                            f"3. Support standard Node.js exports/imports."
+                        )
                     builder_messages = [
                         {
                             "role": "system",
