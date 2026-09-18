@@ -26,16 +26,32 @@ class GitManager:
         )
 
     def get_current_branch(self) -> str:
-        res = self._run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-        return res.stdout.strip()
+        try:
+            res = self._run(["git", "symbolic-ref", "--short", "HEAD"], check=False)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+            res = self._run(["git", "rev-parse", "--abbrev-ref", "HEAD"], check=False)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+        return "main"
 
     def create_feature_branch(self, branch_name: str) -> bool:
         """Create and checkout a new branch for the agent's work."""
+        # Check if repo has any commits; if empty, initialize with an initial commit
+        has_commits = self._run(["git", "rev-parse", "--verify", "HEAD"], check=False).returncode == 0
+        if not has_commits:
+            try:
+                self._run(["git", "commit", "--allow-empty", "-m", "chore: initialize repository"], check=False)
+            except Exception:
+                pass
+
         try:
             self._run(["git", "checkout", "-b", branch_name])
             return True
         except subprocess.CalledProcessError:
-            self._run(["git", "checkout", branch_name])
+            self._run(["git", "checkout", branch_name], check=False)
             return False
 
     def rollback(self) -> None:
