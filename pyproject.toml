@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "antcoder"
+version = "0.1.0"
+description = "Ant Coder: Autonomous Sub-8B Multi-Agent Software Engineering CLI"
+readme = "README.md"
+authors = [{ name = "Deep Das", email = "dasd17933@gmail.com" }]
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+dependencies = [
+    "rich>=13.0.0"
+]
+requires-python = ">=3.9"
+
+[project.scripts]
+antcoder = "antcoder.cli:main"
+ant = "antcoder.cli:main"
