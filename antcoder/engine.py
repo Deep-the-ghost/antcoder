@@ -93,6 +93,36 @@ class ScaffoldingEngine:
 
         raise ValueError(f"Could not parse valid JSON DAG from planner output. Snippet: {raw_text[:200]}")
 
+    @staticmethod
+    def _extract_code(raw_text: str) -> str:
+        """
+        Extract pure executable code from model output.
+        Sub-8B models frequently wrap code in markdown fences (```lang ... ```)
+        and append conversational postscripts or secondary code examples.
+        """
+        text = raw_text.strip()
+
+        # 1. Search for markdown code fence blocks: ```lang ... ```
+        pattern = r"```(?:[a-zA-Z0-9_\-+]+)?\r?\n(.*?)```"
+        matches = list(re.finditer(pattern, text, re.DOTALL))
+        if matches:
+            return matches[0].group(1).strip()
+
+        # 2. Check for unclosed fence at start (e.g. truncated or missing closing fence)
+        unclosed = re.match(r"^```(?:[a-zA-Z0-9_\-+]+)?\r?\n(.*)$", text, re.DOTALL)
+        if unclosed:
+            return unclosed.group(1).strip()
+
+        # 3. Fallback: Strip leading/trailing code fences if present
+        for prefix in ["```typescript", "```javascript", "```html", "```js", "```ts", "```python", "```py", "```"]:
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+        if text.endswith("```"):
+            text = text[:-3].strip()
+
+        return text
+
+
     def scan_repository(self) -> str:
         """
         Scans the repository to produce a concise architectural summary of existing files,
@@ -423,12 +453,7 @@ class ScaffoldingEngine:
                     ]
 
                 impl_code = self.model_client.query(builder_messages, model_type="builder")
-                clean_impl = impl_code.strip()
-                for prefix in ["```typescript", "```javascript", "```html", "```js", "```ts", "```"]:
-                    if clean_impl.startswith(prefix):
-                        clean_impl = clean_impl[len(prefix):].strip()
-                if clean_impl.endswith("```"):
-                    clean_impl = clean_impl[:-3].strip()
+                clean_impl = self._extract_code(impl_code)
 
                 abs_target = self.repo_path / target_file
                 abs_target.parent.mkdir(parents=True, exist_ok=True)

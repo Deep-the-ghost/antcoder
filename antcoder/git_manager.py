@@ -91,11 +91,16 @@ class GitManager:
 
         # Strip markdown fences for diff / code
         stripped = clean_patch
-        for prefix in ["```diff", "```patch", "```javascript", "```typescript", "```html", "```python", "```"]:
-            if stripped.startswith(prefix):
-                stripped = stripped[len(prefix):].strip()
-        if stripped.endswith("```"):
-            stripped = stripped[:-3].strip()
+        pattern = r"```(?:[a-zA-Z0-9_\-+]+)?\r?\n(.*?)```"
+        fence_matches = list(re.finditer(pattern, stripped, re.DOTALL))
+        if fence_matches:
+            stripped = fence_matches[0].group(1).strip()
+        else:
+            for prefix in ["```diff", "```patch", "```javascript", "```typescript", "```html", "```python", "```"]:
+                if stripped.startswith(prefix):
+                    stripped = stripped[len(prefix):].strip()
+            if stripped.endswith("```"):
+                stripped = stripped[:-3].strip()
 
         # Strategy 2: Context-Aware Hunk Parsing
         if ("--- " in stripped or "+++ " in stripped) and "@@" in stripped:

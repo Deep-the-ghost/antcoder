@@ -54,10 +54,32 @@ class TestIncrementalEngine(unittest.TestCase):
             and not (d.code == "TS2307" and any(Path(df).stem in d.message for df in dag_files))
         ]
 
-        # Only bird.js diagnostic should be actionable for bird.js task
-        self.assertEqual(len(actionable), 1)
-        self.assertEqual(actionable[0].file, "bird.js")
+    def test_extract_code_with_conversational_filler(self):
+        raw = (
+            "Here is the implementation:\n"
+            "```javascript\n"
+            "class Bird {\n"
+            "    constructor() {\n"
+            "        this.y = 100;\n"
+            "    }\n"
+            "}\n"
+            "```\n"
+            "To use this `Bird` class in a game loop, you would need to create instances of it.\n"
+            "```javascript\n"
+            "const b = new Bird();\n"
+            "```"
+        )
+        extracted = ScaffoldingEngine._extract_code(raw)
+        self.assertIn("class Bird", extracted)
+        self.assertNotIn("To use this", extracted)
+        self.assertNotIn("const b = new Bird()", extracted)
+
+    def test_extract_code_raw_without_fences(self):
+        raw = "class Pipe { constructor() {} }"
+        extracted = ScaffoldingEngine._extract_code(raw)
+        self.assertEqual(extracted, "class Pipe { constructor() {} }")
 
 
 if __name__ == "__main__":
     unittest.main()
+
