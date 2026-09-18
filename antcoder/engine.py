@@ -320,7 +320,7 @@ class ScaffoldingEngine:
 
                 # Verify with compiler
                 self._emit("verifier_start", {"task_id": t_id})
-                success, diagnostics, raw_out = self.verifier.run_compiler()
+                success, diagnostics, raw_out = self.verifier.run_compiler(target_file=target_file)
 
                 # Filter diagnostics to actionable errors for current node
                 # (Ignore TS2307 for files that exist in the DAG but are built later)
@@ -370,7 +370,7 @@ class ScaffoldingEngine:
                         else:
                             self._emit("fixer_patch_applied", {"task_id": t_id})
 
-                        success, diagnostics, raw_out = self.verifier.run_compiler()
+                        success, diagnostics, raw_out = self.verifier.run_compiler(target_file=target_file)
                         actionable_diags = [
                             d for d in diagnostics
                             if not (d.code == "TS2307" and any(Path(df).stem in d.message for df in dag_files))
