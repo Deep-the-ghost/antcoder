@@ -68,6 +68,60 @@ class TestVerifierMultiRuntime(unittest.TestCase):
         self.assertIn("line 3", ctx)
         self.assertIn("   3: ", ctx)
 
+    def test_detects_empty_comment_stub(self):
+        # Simulates the hollow physics.js stub from the Mario game
+        stub_js = self.test_dir / "physics.js"
+        stub_js.write_text("""
+        class Physics {
+            applyGravity() {
+                // Gravity logic
+            }
+            applyJumpVelocity() {
+                // Jump velocity logic
+            }
+        }
+        """)
+        verifier = Verifier(self.test_dir, build_cmd=["true"])
+        success, diags, raw = verifier.run_compiler(target_file="physics.js")
+        self.assertFalse(success, "Expected stub methods to be rejected by anti-stub inspector")
+        stub_codes = [d.code for d in diags]
+        self.assertIn("ANTI_STUB", stub_codes)
+        stub_msgs = " ".join(d.message for d in diags)
+        self.assertIn("applyGravity", stub_msgs)
+        self.assertIn("applyJumpVelocity", stub_msgs)
+
+    def test_detects_hollow_constructor_stub(self):
+        # Simulates coin.js / platform.js empty constructors
+        coin_js = self.test_dir / "coin.js"
+        coin_js.write_text("""
+        class Coin {
+            constructor() {
+                // Coin initialization
+            }
+        }
+        """)
+        verifier = Verifier(self.test_dir, build_cmd=["true"])
+        success, diags, raw = verifier.run_compiler(target_file="coin.js")
+        self.assertFalse(success, "Expected hollow constructor to be flagged as stub")
+        self.assertTrue(any(d.code == "ANTI_STUB" and "constructor" in d.message for d in diags))
+
+    def test_allows_implemented_code_with_comments(self):
+        # Legitimate implementation with comments should not trigger false positives
+        real_js = self.test_dir / "real.js"
+        real_js.write_text("""
+        class RealPhysics {
+            applyGravity(entity) {
+                // Gravity calculation logic
+                entity.vy += 0.5;
+                if (entity.vy > 12) entity.vy = 12;
+            }
+        }
+        """)
+        verifier = Verifier(self.test_dir, build_cmd=["true"])
+        success, diags, raw = verifier.run_compiler(target_file="real.js")
+        self.assertTrue(success, f"Expected real implementation to pass cleanly, got: {diags}")
+        self.assertEqual(len(diags), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

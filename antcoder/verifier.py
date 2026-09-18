@@ -151,8 +151,89 @@ class Verifier:
                 except Exception:
                     pass
 
+        # 4. Anti-Stub & Completeness Inspector
+        stub_diags = self.inspect_stubs(target_file=target_file)
+        if stub_diags:
+            all_diags.extend(stub_diags)
+            raw_outputs.append("\n".join(d.raw for d in stub_diags))
+
         success = len(all_diags) == 0
         return success, all_diags, "\n---\n".join(filter(None, raw_outputs))
+
+    def inspect_stubs(self, target_file: Optional[str] = None) -> List[Diagnostic]:
+        """
+        Anti-Stub & Quality Inspector:
+        Scans code to ensure functions, methods, and constructors are not hollow
+        skeletons (e.g. empty bodies or comment-only placeholders like '// logic here').
+        """
+        diagnostics: List[Diagnostic] = []
+        if target_file:
+            candidates = [self.repo_path / target_file]
+        else:
+            candidates = list(self.repo_path.glob("**/*"))
+
+        js_ts_pattern = re.compile(
+            r'(?:(?:async\s+)?(?:function\s+)?([a-zA-Z0-9_$]+)\s*\([^)]*\)\s*(?::\s*[^{]+)?)\s*\{([^}]*)\}',
+            re.MULTILINE
+        )
+
+        for p in candidates:
+            if not p.is_file() or "node_modules" in p.parts or ".git" in p.parts:
+                continue
+            if not any(p.name.endswith(ext) for ext in [".js", ".mjs", ".ts", ".tsx"]):
+                continue
+
+            try:
+                rel_path = str(p.relative_to(self.repo_path))
+            except Exception:
+                rel_path = p.name
+
+            # Skip planned skeleton marker files created during initial setup
+            try:
+                content = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+
+            if "// Planned module skeleton for AntCoder DAG" in content:
+                continue
+
+            for m in js_ts_pattern.finditer(content):
+                fn_name = m.group(1)
+                body = m.group(2)
+                is_stub, reason = self._is_stub_body(body)
+                if is_stub:
+                    line_no = content[:m.start()].count("\n") + 1
+                    raw_msg = f"{rel_path}:{line_no}:1 - error ANTI_STUB: Function/method '{fn_name}' has no executable implementation ({reason})."
+                    diagnostics.append(
+                        Diagnostic(
+                            file=rel_path,
+                            line=line_no,
+                            col=1,
+                            code="ANTI_STUB",
+                            message=f"ANTI_STUB: Function/method '{fn_name}' has no executable implementation ({reason}). Implement the complete operational logic without placeholders.",
+                            raw=raw_msg
+                        )
+                    )
+
+        return diagnostics
+
+    @staticmethod
+    def _is_stub_body(body: str) -> Tuple[bool, str]:
+        """Examine a function/method body for empty or placeholder patterns."""
+        body_no_comments = re.sub(r'//.*', '', body)
+        body_no_comments = re.sub(r'/\*[\s\S]*?\*/', '', body_no_comments).strip()
+
+        # 1. Body has literally zero executable statements (only whitespace and/or comments)
+        if not body_no_comments:
+            return True, "Empty body containing zero executable statements"
+
+        # 2. Body has only a trivial return / pass accompanied by a placeholder comment
+        has_placeholder = bool(re.search(r'(?:todo|implement|placeholder|logic\b|initialization\b)', body, re.IGNORECASE))
+        cleaned_stmts = body_no_comments.replace(';', '').strip()
+        if has_placeholder and cleaned_stmts in ('return', 'return null', 'return undefined', 'return false', 'return true', 'pass'):
+            return True, f"Hollow stub returning constant ({cleaned_stmts}) with placeholder comment"
+
+        return False, ""
 
     def _parse_node_check_output(self, output: str, fallback_file: str) -> List[Diagnostic]:
         """Parse node --check stderr into Diagnostic objects with line and column."""
