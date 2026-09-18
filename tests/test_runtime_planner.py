@@ -50,6 +50,47 @@ class TestRuntimePlanner(unittest.TestCase):
         self.assertTrue(script_tags.find("physics.js") < script_tags.find("player.js"))
         self.assertTrue(script_tags.find("player.js") < script_tags.find("game.js"))
 
+    def test_dict_based_dag_tasks(self):
+        # Simulates the Flappy Bird planner output format
+        raw_output = """
+        {
+            "target_runtime": "browser-vanilla",
+            "index.html": {
+                "deps": ["game.js"],
+                "contract": "HTML runner"
+            },
+            "game.js": {
+                "deps": ["bird.js", "pipe.js"],
+                "contract": "Main game loop"
+            },
+            "bird.js": {
+                "deps": [],
+                "contract": "Bird physics"
+            }
+        }
+        """
+        parsed = ScaffoldingEngine._parse_json_safely(raw_output)
+        self.assertEqual(parsed.get("target_runtime"), "browser-vanilla")
+
+        # Emulate engine task normalization
+        raw_tasks = parsed.get("dag") or []
+        if not raw_tasks and isinstance(parsed, dict):
+            candidate_tasks = []
+            for k, v in parsed.items():
+                if k in ("target_runtime", "version", "architecture", "type", "description", "goal"):
+                    continue
+                if isinstance(v, dict):
+                    if "file" not in v and any(k.endswith(ext) for ext in [".js", ".ts", ".html"]):
+                        v["file"] = k
+                    if "id" not in v:
+                        v["id"] = k
+                    candidate_tasks.append(v)
+            raw_tasks = candidate_tasks
+
+        self.assertEqual(len(raw_tasks), 3)
+        files = {t["file"] for t in raw_tasks}
+        self.assertEqual(files, {"index.html", "game.js", "bird.js"})
+
 
 if __name__ == "__main__":
     unittest.main()

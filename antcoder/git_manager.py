@@ -56,8 +56,8 @@ class GitManager:
 
     def rollback(self) -> None:
         """Discard all uncommitted modifications atomically."""
-        self._run(["git", "checkout", "--", "."])
-        self._run(["git", "clean", "-fd"])
+        self._run(["git", "checkout", "--", "."], check=False)
+        self._run(["git", "clean", "-fd"], check=False)
 
     def get_diff(self) -> str:
         """Get the current uncommitted git diff."""

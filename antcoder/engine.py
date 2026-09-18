@@ -159,12 +159,26 @@ class ScaffoldingEngine:
             raw_tasks = plan_dict.get("dag") or plan_dict.get("tasks") or plan_dict.get("steps") or []
             if isinstance(plan_dict, list):
                 raw_tasks = plan_dict
+            elif not raw_tasks and isinstance(plan_dict, dict):
+                # Check if the dictionary itself maps filenames or task IDs to task specifications
+                candidate_tasks = []
+                for k, v in plan_dict.items():
+                    if k in ("target_runtime", "version", "architecture", "type", "description", "goal"):
+                        continue
+                    if isinstance(v, dict):
+                        if "file" not in v and any(k.endswith(ext) for ext in [".js", ".ts", ".html", ".py", ".css"]):
+                            v["file"] = k
+                        if "id" not in v:
+                            v["id"] = k
+                        candidate_tasks.append(v)
+                if candidate_tasks:
+                    raw_tasks = candidate_tasks
 
             # Target runtime detection: planner declared or auto-inferred
             target_runtime = plan_dict.get("target_runtime")
             if not target_runtime:
                 goal_lower = goal_description.lower()
-                if any(k in goal_lower for k in ["game", "canvas", "browser", "html", "mario", "snake", "pong", "play"]):
+                if any(k in goal_lower for k in ["game", "canvas", "browser", "html", "mario", "snake", "pong", "play", "flappy"]):
                     target_runtime = "browser-vanilla"
                 else:
                     target_runtime = "node-esm"
