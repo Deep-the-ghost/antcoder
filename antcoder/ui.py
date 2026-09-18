@@ -108,6 +108,14 @@ class TerminalUI:
                     title="[bold green]Success[/bold green]",
                     border_style="green"
                 ))
+            elif event == "task_failed":
+                self.console.print(f"\n❌ [bold red]Task Verification Failed:[/bold red] Task [cyan]{data.get('task_id')}[/cyan] ({data.get('file')}) has [bold red]{data.get('errors')}[/bold red] unresolved diagnostic(s):")
+                for d in data.get("diagnostics", []):
+                    line = d.get("line", "?")
+                    msg = d.get("message", d.get("raw", ""))
+                    code = d.get("code", "ERROR")
+                    self.console.print(f"   🔴 [bold yellow]Line {line}[/bold yellow] [{code}]: {msg}")
+                self.console.print("   🔄 [dim]Strict verification gate triggered: rolling back workspace.[/dim]")
             elif event == "task_abort":
                 self.console.print(f"\n❌ [bold red]Task aborted:[/bold red] {data.get('reason')}. Atomic rollback executed.")
             elif event == "fatal_error":

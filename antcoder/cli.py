@@ -59,8 +59,8 @@ def main():
     parser.add_argument(
         "--retries",
         type=int,
-        default=3,
-        help="Maximum compiler fixer loop retries per task (default: 3)"
+        default=5,
+        help="Maximum compiler fixer loop retries per task (default: 5)"
     )
 
     args = parser.parse_args()
@@ -230,6 +230,20 @@ def main():
     if result.get("status") == "SUCCESS":
         sys.exit(0)
     else:
+        unresolved = result.get("unresolved_diagnostics", [])
+        if unresolved:
+            if ui.rich:
+                ui.console.print("\n[bold red]🚨 Build failed verification with unresolved compiler diagnostics:[/bold red]")
+                for d in unresolved[:8]:
+                    f_name = d.get("file", "unknown")
+                    line_no = d.get("line", "?")
+                    code_val = d.get("code", "ERROR")
+                    msg_val = d.get("message", d.get("raw", ""))
+                    ui.console.print(f"  🔴 [yellow]{f_name}:{line_no}[/yellow] [{code_val}] {msg_val}")
+            else:
+                print("\n🚨 Build failed verification with unresolved compiler diagnostics:")
+                for d in unresolved[:8]:
+                    print(f"  • {d.get('file', 'unknown')}:{d.get('line', '?')} - {d.get('message', '')}")
         sys.exit(1)
 
 

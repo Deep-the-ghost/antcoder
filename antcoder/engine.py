@@ -401,6 +401,26 @@ class ScaffoldingEngine:
                     fpath.parent.mkdir(parents=True, exist_ok=True)
                     fpath.write_text("// Planned module skeleton for AntCoder DAG\nexport {};\n")
 
+            # Auto-provision modern DOM-compatible tsconfig.json if missing
+            default_tsconfig = self.repo_path / "tsconfig.json"
+            if not default_tsconfig.exists():
+                try:
+                    default_tsconfig.write_text(json.dumps({
+                        "compilerOptions": {
+                            "target": "ES2022",
+                            "module": "NodeNext",
+                            "moduleResolution": "NodeNext",
+                            "lib": ["DOM", "DOM.Iterable", "ES2022"],
+                            "strict": False,
+                            "skipLibCheck": True,
+                            "esModuleInterop": True,
+                            "allowJs": True,
+                            "checkJs": False
+                        }
+                    }, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
             # 4. Iterate over DAG nodes
             for step_idx, t_id in enumerate(ordered_task_ids, start=1):
                 task = task_by_id.get(t_id)
@@ -553,20 +573,26 @@ class ScaffoldingEngine:
                         diag = actionable_diags[0]
                         code_context = self.verifier.extract_context(diag.file, diag.line)
 
+                        if len(actionable_diags) > 1:
+                            diags_formatted = "\n".join([f"- Line {d.line}: {d.raw}" for d in actionable_diags[:5]])
+                            diag_header = f"COMPILER DIAGNOSTICS ({len(actionable_diags)} error(s)):\n{diags_formatted}"
+                        else:
+                            diag_header = f"DIAGNOSTIC:\n{diag.raw}"
+
                         if fix_attempt == self.max_fix_retries:
                             # Final retry: ask for complete corrected file
                             fixer_prompt = (
                                 f"FILE: {diag.file}\n\n"
-                                f"DIAGNOSTIC:\n{diag.raw}\n\n"
+                                f"{diag_header}\n\n"
                                 f"CODE CONTEXT:\n{code_context}\n\n"
-                                f"Prior patch attempts failed. Directly output the 100% complete, corrected file with the error fixed."
+                                f"Prior patch attempts failed. Directly output the 100% complete, corrected file with all errors fixed."
                             )
                         else:
                             fixer_prompt = (
                                 f"FILE: {diag.file}\n\n"
-                                f"DIAGNOSTIC:\n{diag.raw}\n\n"
+                                f"{diag_header}\n\n"
                                 f"CODE CONTEXT:\n{code_context}\n\n"
-                                f"Fix the diagnostic error. You may output a SEARCH/REPLACE block:\n"
+                                f"Fix the diagnostic errors. You may output a SEARCH/REPLACE block:\n"
                                 f"<<<<<<< SEARCH\n"
                                 f"exact lines from code\n"
                                 f"=======\n"

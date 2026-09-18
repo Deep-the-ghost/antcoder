@@ -58,10 +58,12 @@ class Verifier:
                         "target": "ES2022",
                         "module": "NodeNext",
                         "moduleResolution": "NodeNext",
+                        "lib": ["DOM", "DOM.Iterable", "ES2022"],
                         "strict": False,
                         "skipLibCheck": True,
                         "esModuleInterop": True,
-                        "allowJs": True
+                        "allowJs": True,
+                        "checkJs": False
                     }
                 }, indent=2))
             except Exception:
