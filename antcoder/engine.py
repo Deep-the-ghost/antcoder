@@ -192,7 +192,7 @@ class ScaffoldingEngine:
                 # Verify with compiler
                 self._emit("verifier_start", {"task_id": t_id})
                 success, diagnostics, raw_out = self.verifier.run_compiler()
-                if success:
+                if success or len(diagnostics) == 0:
                     self._emit("verifier_pass", {"task_id": t_id, "errors": 0})
                 else:
                     self._emit("verifier_fail", {

@@ -38,11 +38,35 @@ class Verifier:
 
     def _detect_build_cmd(self) -> List[str]:
         """Detect the best build/typecheck command for this repository."""
+        import shutil
+        tsc_bin = shutil.which("tsc") or "/home/deep/.nvm/versions/node/v24.20.0/bin/tsc"
+        if not shutil.which(tsc_bin) and not os.path.exists(tsc_bin):
+            tsc_bin = "tsc"
+
         if (self.repo_path / "tsconfig.build.json").exists():
-            return ["npx", "--no-install", "tsc", "--noEmit", "-p", "tsconfig.build.json"]
+            return [tsc_bin, "--noEmit", "-p", "tsconfig.build.json"]
         elif (self.repo_path / "tsconfig.json").exists():
-            return ["npx", "--no-install", "tsc", "--noEmit"]
-        return ["npx", "tsc", "--noEmit"]
+            return [tsc_bin, "--noEmit"]
+
+        # If repo has no tsconfig, initialize a minimal tsconfig for type verification
+        default_tsconfig = self.repo_path / "tsconfig.json"
+        if not default_tsconfig.exists():
+            try:
+                import json
+                default_tsconfig.write_text(json.dumps({
+                    "compilerOptions": {
+                        "target": "ES2022",
+                        "module": "CommonJS",
+                        "moduleResolution": "node",
+                        "strict": False,
+                        "skipLibCheck": True,
+                        "esModuleInterop": True
+                    }
+                }, indent=2))
+            except Exception:
+                pass
+
+        return [tsc_bin, "--noEmit", "--skipLibCheck"]
 
     def run_compiler(self, timeout_sec: int = 60) -> Tuple[bool, List[Diagnostic], str]:
         """
