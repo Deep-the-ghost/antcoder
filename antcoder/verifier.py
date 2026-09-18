@@ -48,7 +48,7 @@ class Verifier:
         elif (self.repo_path / "tsconfig.json").exists():
             return [tsc_bin, "--noEmit"]
 
-        # If repo has no tsconfig, initialize a minimal tsconfig for type verification
+        # If repo has no tsconfig, initialize a modern TypeScript 7+ tsconfig
         default_tsconfig = self.repo_path / "tsconfig.json"
         if not default_tsconfig.exists():
             try:
@@ -56,8 +56,8 @@ class Verifier:
                 default_tsconfig.write_text(json.dumps({
                     "compilerOptions": {
                         "target": "ES2022",
-                        "module": "CommonJS",
-                        "moduleResolution": "node",
+                        "module": "NodeNext",
+                        "moduleResolution": "NodeNext",
                         "strict": False,
                         "skipLibCheck": True,
                         "esModuleInterop": True
@@ -108,6 +108,8 @@ class Verifier:
             m = pattern1.match(line_clean) or pattern2.match(line_clean)
             if m:
                 filepath = m.group(1).strip()
+                if not any(filepath.endswith(ext) for ext in [".ts", ".tsx", ".js", ".jsx"]):
+                    continue
                 line_no = int(m.group(2))
                 col_no = int(m.group(3))
                 code = m.group(5).strip()

@@ -243,13 +243,16 @@ class ScaffoldingEngine:
                     f"FILE: {target_file}\n\n"
                     f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
                     f"TASK SPECIFICATION:\n"
-                    f"Implement the TypeScript code satisfying this exact contract:\n"
-                    f"```typescript\n{spec}\n```"
+                    f"Implement the complete TypeScript file satisfying this contract:\n"
+                    f"```typescript\n{spec}\n```\n\n"
+                    f"RULES:\n"
+                    f"1. You MUST include all necessary 'import ... from ...' statements at the top of the file for any types or classes referenced from other modules.\n"
+                    f"2. 100% complete zero-stub code. Output ONLY executable TypeScript code."
                 )
                 builder_messages = [
                     {
                         "role": "system",
-                        "content": "You are an autonomous TypeScript software engineer. Implement the contract with 100% type safety and zero placeholders. Output ONLY the code."
+                        "content": "You are an autonomous TypeScript software engineer. Always include all required import statements at the top of the file. Implement the contract with 100% type safety and zero placeholders. Output ONLY the code."
                     },
                     {"role": "user", "content": builder_prompt},
                 ]
