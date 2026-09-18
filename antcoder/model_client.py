@@ -53,6 +53,8 @@ class HTTPModelClient(BaseModelClient):
             "temperature": 0.1,
             "max_tokens": 2048,
         }
+        if model_type == "planner":
+            payload["response_format"] = {"type": "json_object"}
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers)

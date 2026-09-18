@@ -5,6 +5,7 @@ Builder LoRA, Compiler verification (tsc), Fixer LoRA, and Git isolation.
 """
 
 import os
+import re
 import uuid
 import time
 import json
@@ -36,6 +37,61 @@ class ScaffoldingEngine:
 
     def _emit(self, event: str, data: Dict[str, Any]):
         self.event_callback(event, data)
+
+    @staticmethod
+    def _parse_json_safely(raw_text: str) -> dict:
+        """Robustly extract and parse JSON from model output."""
+        clean = raw_text.strip()
+
+        # 1. Direct parse attempt
+        try:
+            return json.loads(clean)
+        except Exception:
+            pass
+
+        # 2. Strip markdown blocks if present
+        for prefix in ["```json", "```JSON", "```"]:
+            if prefix in clean:
+                parts = clean.split(prefix, 1)
+                if len(parts) > 1:
+                    code_part = parts[1]
+                    if "```" in code_part:
+                        clean = code_part.split("```", 1)[0].strip()
+                        break
+
+        try:
+            return json.loads(clean)
+        except Exception:
+            pass
+
+        # 3. Extract outermost { ... }
+        first_brace = clean.find("{")
+        last_brace = clean.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            extracted = clean[first_brace:last_brace + 1]
+            try:
+                return json.loads(extracted)
+            except Exception:
+                # Repair trailing commas: ,} or ,]
+                repaired = re.sub(r",\s*([\]}])", r"\1", extracted)
+                try:
+                    return json.loads(repaired)
+                except Exception:
+                    pass
+
+        # 4. Extract outermost [ ... ]
+        first_bracket = clean.find("[")
+        last_bracket = clean.rfind("]")
+        if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+            extracted = clean[first_bracket:last_bracket + 1]
+            try:
+                res = json.loads(extracted)
+                if isinstance(res, list):
+                    return {"dag": res}
+            except Exception:
+                pass
+
+        raise ValueError(f"Could not parse valid JSON DAG from planner output. Snippet: {raw_text[:200]}")
 
     def execute_feature_goal(
         self,
@@ -96,20 +152,38 @@ class ScaffoldingEngine:
 
             planner_raw = self.model_client.query(planner_messages, model_type="planner")
 
-            # Clean JSON if formatted in markdown block
-            clean_plan = planner_raw.strip()
-            if clean_plan.startswith("```json"):
-                clean_plan = clean_plan[7:]
-            if clean_plan.startswith("```"):
-                clean_plan = clean_plan[3:]
-            if clean_plan.endswith("```"):
-                clean_plan = clean_plan[:-3]
-            clean_plan = clean_plan.strip()
+            # Robust JSON extraction & normalization
+            plan_dict = self._parse_json_safely(planner_raw)
+            raw_tasks = plan_dict.get("dag") or plan_dict.get("tasks") or plan_dict.get("steps") or []
+            if isinstance(plan_dict, list):
+                raw_tasks = plan_dict
 
-            plan_dict = json.loads(clean_plan)
-            dag_tasks = plan_dict.get("dag") or plan_dict.get("tasks") or []
+            if not raw_tasks:
+                raise ValueError(f"Planner failed to generate valid 'dag' task nodes. Output preview: {planner_raw[:200]}")
+
+            # Normalize task fields (id, file, contract, deps)
+            dag_tasks = []
+            for idx, t in enumerate(raw_tasks, start=1):
+                if not isinstance(t, dict):
+                    continue
+                t_id = str(t.get("id") or t.get("name") or t.get("step") or f"node_{idx}")
+                t_file = t.get("file") or t.get("file_path") or t.get("path") or f"src/module_{idx}.ts"
+                t_contract = t.get("contract") or t.get("spec") or t.get("description") or t.get("interface") or "export interface ModuleInterface {}"
+                t_deps = t.get("deps") or t.get("dependencies") or []
+                if isinstance(t_deps, str):
+                    t_deps = [d.strip() for d in t_deps.split(",") if d.strip()]
+                elif not isinstance(t_deps, list):
+                    t_deps = []
+                dag_tasks.append({
+                    "id": t_id,
+                    "file": t_file,
+                    "contract": t_contract,
+                    "deps": [str(d) for d in t_deps],
+                    "description": t.get("description", "")
+                })
+
             if not dag_tasks:
-                raise ValueError("Planner failed to generate valid 'dag' task nodes.")
+                raise ValueError("No actionable tasks could be normalized from the planner DAG.")
 
             log(f"Planner synthesized {len(dag_tasks)} task node(s) in DAG.")
             telemetry["dag"] = dag_tasks
