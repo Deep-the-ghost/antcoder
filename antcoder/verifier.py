@@ -70,9 +70,13 @@ class Verifier:
 
     def run_compiler(self, timeout_sec: int = 60) -> Tuple[bool, List[Diagnostic], str]:
         """
-        Runs the TypeScript compiler.
+        Runs the TypeScript compiler and Node syntax checking for JS files.
         Returns: (success: bool, diagnostics: List[Diagnostic], raw_output: str)
         """
+        all_diags: List[Diagnostic] = []
+        raw_outputs: List[str] = []
+
+        # 1. Run TypeScript compiler
         try:
             proc = subprocess.run(
                 self.build_cmd,
@@ -82,15 +86,63 @@ class Verifier:
                 timeout=timeout_sec,
             )
             raw = proc.stdout + "\n" + proc.stderr
-            if proc.returncode == 0:
-                return True, [], raw.strip()
-
-            diagnostics = self._parse_tsc_output(raw)
-            return False, diagnostics, raw.strip()
+            raw_outputs.append(raw.strip())
+            if proc.returncode != 0:
+                all_diags.extend(self._parse_tsc_output(raw))
         except subprocess.TimeoutExpired:
             return False, [], "Compiler execution timed out."
         except Exception as e:
             return False, [], f"Compiler execution error: {str(e)}"
+
+        # 2. Syntax check all .js files using node --check
+        import shutil
+        node_bin = shutil.which("node") or "/home/deep/.nvm/versions/node/v24.20.0/bin/node"
+        if os.path.exists(node_bin) or shutil.which("node"):
+            js_files = list(self.repo_path.glob("**/*.js"))
+            for js_file in js_files:
+                if "node_modules" in js_file.parts or ".git" in js_file.parts:
+                    continue
+                try:
+                    js_proc = subprocess.run(
+                        [node_bin, "--check", str(js_file)],
+                        cwd=self.repo_path,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if js_proc.returncode != 0:
+                        raw_outputs.append(f"Node syntax check failed on {js_file.name}:\n{js_proc.stderr}")
+                        diags = self._parse_node_check_output(js_proc.stderr, str(js_file.relative_to(self.repo_path)))
+                        all_diags.extend(diags)
+                except Exception:
+                    pass
+
+        success = len(all_diags) == 0
+        return success, all_diags, "\n---\n".join(filter(None, raw_outputs))
+
+    def _parse_node_check_output(self, output: str, fallback_file: str) -> List[Diagnostic]:
+        """Parse node --check stderr into Diagnostic objects."""
+        diagnostics = []
+        lines = output.splitlines()
+        file_path = fallback_file
+        line_no = 1
+        msg = "SyntaxError"
+
+        file_line_re = re.compile(r"^(.+?):(\d+)(?::(\d+))?$")
+        for line in lines:
+            line_str = line.strip()
+            m = file_line_re.match(line_str)
+            if m:
+                try:
+                    file_path = str(Path(m.group(1)).relative_to(self.repo_path))
+                except Exception:
+                    file_path = m.group(1)
+                line_no = int(m.group(2))
+            elif "SyntaxError:" in line or "Error:" in line:
+                msg = line_str
+
+        diagnostics.append(Diagnostic(file_path, line_no, 1, "JS_SYNTAX", msg, output.strip()[:300]))
+        return diagnostics
 
     def _parse_tsc_output(self, output: str) -> List[Diagnostic]:
         """

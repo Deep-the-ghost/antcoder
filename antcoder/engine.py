@@ -239,28 +239,69 @@ class ScaffoldingEngine:
                             context_parts.append(f"// Dependency from {dep_task['file']}:\n{f.read()}")
                 context_str = "\n\n".join(context_parts) if context_parts else None
 
-                # Query Builder
-                builder_prompt = (
-                    f"FILE: {target_file}\n\n"
-                    f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
-                    f"TASK SPECIFICATION:\n"
-                    f"Implement the complete TypeScript file satisfying this contract:\n"
-                    f"```typescript\n{spec}\n```\n\n"
-                    f"RULES:\n"
-                    f"1. You MUST include all necessary 'import ... from ...' statements at the top of the file for any types or classes referenced from other modules.\n"
-                    f"2. 100% complete zero-stub code. Output ONLY executable TypeScript code."
-                )
-                builder_messages = [
-                    {
-                        "role": "system",
-                        "content": "You are an autonomous TypeScript software engineer. Always include all required import statements at the top of the file. Implement the contract with 100% type safety and zero placeholders. Output ONLY the code."
-                    },
-                    {"role": "user", "content": builder_prompt},
-                ]
+                # Query Builder with extension-aware instructions
+                is_html = target_file.endswith((".html", ".htm"))
+                is_js = target_file.endswith((".js", ".mjs"))
+
+                if is_html:
+                    builder_prompt = (
+                        f"FILE: {target_file}\n\n"
+                        f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
+                        f"TASK SPECIFICATION:\n"
+                        f"Implement the complete HTML file satisfying this contract:\n"
+                        f"{spec}\n\n"
+                        f"RULES:\n"
+                        f"1. Include all necessary HTML5 boilerplate, canvas/DOM containers, CSS styling, and standard <script src='...'> tags loading all project scripts in proper order.\n"
+                        f"2. Zero stubs. Output ONLY valid HTML."
+                    )
+                    builder_messages = [
+                        {
+                            "role": "system",
+                            "content": "You are an autonomous web frontend engineer. Output ONLY valid, complete HTML with responsive CSS styling and functional canvas setup. Zero placeholders."
+                        },
+                        {"role": "user", "content": builder_prompt},
+                    ]
+                elif is_js:
+                    builder_prompt = (
+                        f"FILE: {target_file}\n\n"
+                        f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
+                        f"TASK SPECIFICATION:\n"
+                        f"Implement the complete JavaScript file satisfying this contract:\n"
+                        f"```javascript\n{spec}\n```\n\n"
+                        f"RULES:\n"
+                        f"1. Write 100% valid modern JavaScript (ES6+). Do NOT include TypeScript type annotations or TypeScript private/public modifiers.\n"
+                        f"2. Ensure all functions, methods, game mechanics, physics, and rendering are fully implemented with ZERO stubs or empty placeholders.\n"
+                        f"3. Make components browser-accessible (e.g., attach to globalThis / window and/or module.exports)."
+                    )
+                    builder_messages = [
+                        {
+                            "role": "system",
+                            "content": "You are an autonomous JavaScript software engineer. Implement the contract with complete functional code and zero stubs. Never use TypeScript type annotations in .js files. Output ONLY executable JavaScript code."
+                        },
+                        {"role": "user", "content": builder_prompt},
+                    ]
+                else:
+                    builder_prompt = (
+                        f"FILE: {target_file}\n\n"
+                        f"{('MODULE CONTEXT:\n' + context_str + '\n\n') if context_str else ''}"
+                        f"TASK SPECIFICATION:\n"
+                        f"Implement the complete TypeScript file satisfying this contract:\n"
+                        f"```typescript\n{spec}\n```\n\n"
+                        f"RULES:\n"
+                        f"1. You MUST include all necessary 'import ... from ...' statements at the top of the file for any types or classes referenced from other modules.\n"
+                        f"2. 100% complete zero-stub code. Output ONLY executable TypeScript code. Fully implement all functions and methods."
+                    )
+                    builder_messages = [
+                        {
+                            "role": "system",
+                            "content": "You are an autonomous TypeScript software engineer. Always include all required import statements at the top of the file. Implement the contract with 100% type safety and zero placeholders. Output ONLY the code."
+                        },
+                        {"role": "user", "content": builder_prompt},
+                    ]
 
                 impl_code = self.model_client.query(builder_messages, model_type="builder")
                 clean_impl = impl_code.strip()
-                for prefix in ["```typescript", "```ts", "```"]:
+                for prefix in ["```typescript", "```javascript", "```html", "```js", "```ts", "```"]:
                     if clean_impl.startswith(prefix):
                         clean_impl = clean_impl[len(prefix):].strip()
                 if clean_impl.endswith("```"):
